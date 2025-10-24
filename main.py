@@ -1,5 +1,5 @@
 """
-CryptoPulse.AI v4.4 — Final Version
+CryptoPulse.AI v4.5 — Scheduled, Bluesky, LinkedIn, Substack, Tweets, Shorts script
 Author: Manuel (omcdigest.bsky.social)
 """
 
@@ -10,7 +10,7 @@ import feedparser
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
-# === CONFIGURAÇÕES ===
+# === CONFIG ===============================================================================
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 CRYPTOPANIC_TOKEN = os.getenv("CRYPTOPANIC_TOKEN", "")
@@ -22,138 +22,170 @@ OUT_DIR = "out"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 
-# === Funções utilitárias ===
+# === HELPERS =============================================================================
 def clean_text(text):
-    """Remove URLs e caracteres estranhos"""
+    """Remove URLs e lixo visual para posts curtos."""
     text = re.sub(r"http\S+", "", text)
     text = re.sub(r"www\.\S+", "", text)
     text = text.replace("—", "-").strip()
     return text
 
 
-# === 1️⃣ Buscar notícias ===
+def timestamp():
+    # Ex: 2025-10-25_08h12
+    return datetime.now().strftime("%Y-%m-%d_%Hh%M")
+
+
+# === 1) FETCH NEWS =======================================================================
 def fetch_news(limit=8):
     print("📰 A buscar notícias de crypto...")
     url = "https://cryptopanic.com/api/v1/posts/"
-    params = {"auth_token": CRYPTOPANIC_TOKEN, "filter": "hot", "public": "true"}
-    items = []
+    params = {
+        "auth_token": CRYPTOPANIC_TOKEN,
+        "filter": "hot",
+        "public": "true"
+    }
+    headlines = []
     try:
         r = requests.get(url, params=params, timeout=20)
         r.raise_for_status()
         data = r.json().get("results", [])
-        for i in data[:limit]:
-            title = clean_text(i.get("title", ""))
-            source = (i.get("source") or {}).get("title", "")
-            items.append(f"{title} ({source})")
-        print(f"✅ {len(items)} notícias obtidas.")
+        for item in data[:limit]:
+            title = clean_text(item.get("title", ""))
+            source = (item.get("source") or {}).get("title", "")
+            if source:
+                headlines.append(f"{title} ({source})")
+            else:
+                headlines.append(title)
+        print(f"✅ {len(headlines)} notícias obtidas do CryptoPanic.")
     except Exception as e:
-        print("⚠️ Falha no CryptoPanic, a usar fallback do Google News...", e)
+        print("⚠️ Falha no CryptoPanic, fallback Google News:", e)
         rss = "https://news.google.com/rss/search?q=cryptocurrency&hl=en&gl=US&ceid=US:en"
         feed = feedparser.parse(rss)
-        items = [clean_text(e.title) for e in feed.entries[:limit]]
-    return items
+        for entry in feed.entries[:limit]:
+            headlines.append(clean_text(entry.title))
+        print(f"✅ {len(headlines)} notícias obtidas via Google News fallback.")
+    return headlines
 
 
-# === 2️⃣ Resumo IA ===
-def summarize(news_items):
-    print("🤖 A resumir notícias...")
+# === 2) AI CALL ==========================================================================
+def call_openai(prompt, max_tokens=1000, temperature=0.6):
+    """Faz uma chamada simples ao modelo de texto."""
     if not OPENAI_API_KEY:
-        return "\n".join(news_items)
+        print("⚠️ Falta OPENAI_API_KEY, devolvo prompt.")
+        return f"[NO_AI_KEY]\n{prompt}"
 
-    prompt = f"""
-Summarize the following cryptocurrency news headlines in 8 concise bullet points.
-Each bullet must have a short title in bold and be neutral in tone.
-Headlines:
-{chr(10).join(news_items)}
-"""
-    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": prompt}], "max_tokens": 1000}
-    r = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=body, timeout=90)
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    r = requests.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers=headers,
+        json=body,
+        timeout=90,
+    )
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"]
 
 
-# === 3️⃣ LinkedIn Post ===
-def linkedin_post(news_items):
-    print("💼 A criar texto para LinkedIn...")
+# === 3) CONTENT GENERATORS ===============================================================
+def build_summary(news_items):
+    print("📌 A gerar summary bullets...")
+    prompt = f"""
+Summarize today's cryptocurrency landscape in 8 concise bullet points.
+Each bullet: start with a short bold-style title (like **ETF Surge:**) and then 1 sentence.
+Keep it neutral, informative, English.
+Base it ONLY on these headlines:
+{chr(10).join(news_items)}
+"""
+    return call_openai(prompt, max_tokens=1000, temperature=0.5)
+
+
+def build_linkedin(news_items):
+    print("💼 A gerar LinkedIn post...")
     prompt = f"""
 Write a professional English LinkedIn-style crypto analysis post based on these headlines:
 {chr(10).join(news_items)}
 
-Structure:
-- Engaging intro summarizing today's crypto sentiment
-- 3-4 paragraphs connecting the main events
-- Closing reflection encouraging discussion
-Tone: insightful, professional, calm.
+Format:
+1. Strong intro (market mood / why today matters).
+2. 3-4 short paragraphs tying events together (not bullet points; flowing analysis).
+3. Closing inviting discussion.
+
+Tone: calm, informed, credible. No emojis.
 """
-    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": prompt}], "max_tokens": 1000}
-    r = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=body, timeout=90)
-    r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"]
+    return call_openai(prompt, max_tokens=1000, temperature=0.6)
 
 
-# === 4️⃣ Substack Post ===
-def substack_post(news_items):
-    print("📰 A criar versão newsletter (Substack)...")
+def build_substack(news_items):
+    print("📰 A gerar Substack newsletter...")
     prompt = f"""
-Write a friendly, conversational daily crypto newsletter based on these headlines:
+Write a conversational daily crypto newsletter in English.
+Audience: curious investors who don't have time.
+Style:
+- Warm intro "Good morning..."
+- Then walk through 3-4 key stories in plain language
+- Last line is a forward-looking teaser ("watch this next")
+
+Use short paragraphs. No emojis.
+Base ONLY on:
 {chr(10).join(news_items)}
-
-Structure:
-- Warm intro greeting readers
-- 3-4 news summaries explained conversationally
-- Final reflection or witty closing line
-Tone: informal, narrative, but still informative.
 """
-    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": prompt}], "max_tokens": 1000}
-    r = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=body, timeout=90)
-    r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"]
+    return call_openai(prompt, max_tokens=1000, temperature=0.7)
 
 
-# === 5️⃣ YouTube Shorts ===
-def make_youtube_script(news_items):
-    print("🎬 A criar guião para YouTube Shorts...")
+def build_youtube_script(news_items):
+    print("🎬 A gerar guião YouTube Shorts...")
     prompt = f"""
-Write a 60-second YouTube Short script summarizing today's top 3 crypto stories.
-Tone: futuristic, fast-paced, engaging.
-Include an intro hook, short sentences, and a call-to-action at the end.
-Headlines:
+Write a 60-second YouTube Shorts script in English.
+Goal: fast, hype, but still factual.
+Rules:
+- Hook in first 2 seconds.
+- Then 3 biggest crypto stories today, 1-2 punchy sentences each.
+- End with "Follow for daily crypto in 60 seconds."
+
+Keep sentences short, like spoken voice.
+Base ONLY on:
 {chr(10).join(news_items[:3])}
 """
-    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": prompt}], "max_tokens": 700}
-    r = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=body, timeout=90)
-    r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"]
+    return call_openai(prompt, max_tokens=700, temperature=0.7)
 
 
-# === 6️⃣ Tweets ===
-def generate_tweets(news_items):
-    print("🐦 A criar tweets...")
+def build_tweets(news_items):
+    print("🐦 A gerar tweets...")
     prompt = f"""
-Write one short, punchy tweet (max 250 chars) for each headline below.
-No hashtags, no links, no emojis.
+For EACH headline below, write one tweet in English (max 250 characters).
+No links, no hashtags, no emojis.
+Tweets should sound confident and analytical, not hype.
+Return them as a numbered list (1., 2., 3., ...).
+
 Headlines:
 {chr(10).join(news_items)}
 """
-    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": prompt}], "max_tokens": 800}
-    r = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=body, timeout=60)
-    r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"]
+    return call_openai(prompt, max_tokens=800, temperature=0.6)
 
 
-# === 7️⃣ Postar no Bluesky ===
+# === 4) BLUESKY POSTING ==================================================================
 def post_to_bluesky(text):
+    """Publica um post básico no Bluesky (ou simula se DRY_RUN=1)."""
+    clean = text.strip()
+    clean = clean_text(clean)
+    clean = clean[:280]  # garantes limite
+
     if DRY_RUN:
-        print("🚫 DRY_RUN ativo — simulação:", text[:100], "...")
+        print("🚫 DRY_RUN ativo — simulação de Bluesky:", clean[:120], "...")
         return
 
     print("🌐 A publicar no Bluesky...")
     try:
+        # login
         session = requests.post(
             "https://bsky.social/xrpc/com.atproto.server.createSession",
             json={"identifier": BLUESKY_HANDLE, "password": BLUESKY_PASSWORD},
@@ -168,60 +200,86 @@ def post_to_bluesky(text):
         headers = {"Authorization": f"Bearer {access_token}"}
         record = {
             "$type": "app.bsky.feed.post",
-            "text": text.strip(),
+            "text": clean,
             "createdAt": datetime.now(timezone.utc).isoformat(),
         }
-        data = {"collection": "app.bsky.feed.post", "repo": BLUESKY_HANDLE, "record": record}
-        post = requests.post("https://bsky.social/xrpc/com.atproto.repo.createRecord", headers=headers, json=data, timeout=20)
+        data = {
+            "collection": "app.bsky.feed.post",
+            "repo": BLUESKY_HANDLE,
+            "record": record,
+        }
+
+        post = requests.post(
+            "https://bsky.social/xrpc/com.atproto.repo.createRecord",
+            headers=headers,
+            json=data,
+            timeout=20,
+        )
         post.raise_for_status()
         print("✅ Publicado no Bluesky!")
     except Exception as e:
         print("⚠️ Erro ao publicar no Bluesky:", e)
 
 
-# === 8️⃣ MAIN ===
+# === 5) MAIN =============================================================================
 def main():
     print("\n=== CryptoPulse.AI — Run", datetime.now(timezone.utc), "===\n")
+
+    # 1. Buscar notícias
     news = fetch_news(10)
     if not news:
         print("❌ Nenhuma notícia encontrada.")
         return
 
-    summary = summarize(news)
-    linkedin = linkedin_post(news)
-    substack = substack_post(news)
-    youtube = make_youtube_script(news)
-    tweets = generate_tweets(news)
+    # 2. Gerar conteúdo
+    summary_md   = build_summary(news)
+    linkedin_txt = build_linkedin(news)
+    substack_txt = build_substack(news)
+    shorts_txt   = build_youtube_script(news)
+    tweets_txt   = build_tweets(news)
 
-    date = datetime.now().strftime("%Y-%m-%d_%Hh%M")
+    # 3. Timestamp para ficheiros
+    stamp = timestamp()
 
-    # Guardar ficheiros com timestamp
-    with open(os.path.join(OUT_DIR, f"{date}_summary.md"), "w", encoding="utf-8") as f:
-        f.write(summary)
-    with open(os.path.join(OUT_DIR, f"{date}_linkedin.txt"), "w", encoding="utf-8") as f:
-        f.write(linkedin)
-    with open(os.path.join(OUT_DIR, f"{date}_substack.txt"), "w", encoding="utf-8") as f:
-        f.write(substack)
-    with open(os.path.join(OUT_DIR, f"{date}_shorts.txt"), "w", encoding="utf-8") as f:
-        f.write(youtube)
-    with open(os.path.join(OUT_DIR, f"{date}_tweets.txt"), "w", encoding="utf-8") as f:
-        f.write(tweets)
+    summary_path   = os.path.join(OUT_DIR, f"{stamp}_summary.md")
+    linkedin_path  = os.path.join(OUT_DIR, f"{stamp}_linkedin.txt")
+    substack_path  = os.path.join(OUT_DIR, f"{stamp}_substack.txt")
+    shorts_path    = os.path.join(OUT_DIR, f"{stamp}_shorts.txt")
+    tweets_path    = os.path.join(OUT_DIR, f"{stamp}_tweets.txt")
 
-    # Publicar títulos no Bluesky
+    # 4. Guardar localmente (no runner da cloud OU no teu PC se correres local)
+    with open(summary_path, "w", encoding="utf-8") as f:
+        f.write(summary_md)
+
+    with open(linkedin_path, "w", encoding="utf-8") as f:
+        f.write(linkedin_txt)
+
+    with open(substack_path, "w", encoding="utf-8") as f:
+        f.write(substack_txt)
+
+    with open(shorts_path, "w", encoding="utf-8") as f:
+        f.write(shorts_txt)
+
+    with open(tweets_path, "w", encoding="utf-8") as f:
+        f.write(tweets_txt)
+
+    # 5. Bluesky (publica só os títulos, sem links)
     print("\n🌐 A publicar posts no Bluesky...")
-    for n in news[:5]:
-        title = clean_text(n.split("(")[0]).strip()
-        post_to_bluesky(title[:280])
+    for headline in news[:5]:
+        # headline vem tipo "Bitcoin pumps after ETF approval (CoinDesk)"
+        # queremos só a parte antes do '('
+        title_only = headline.split("(")[0].strip()
+        post_to_bluesky(title_only)
 
-    print("\n💾 Guardado:")
-    print(f"• out/{date}_summary.md — resumo IA")
-    print(f"• out/{date}_linkedin.txt — artigo LinkedIn")
-    print(f"• out/{date}_substack.txt — newsletter Substack")
-    print(f"• out/{date}_shorts.txt — guião YouTube Shorts")
-    print(f"• out/{date}_tweets.txt — tweets")
+    print("\n💾 Ficheiros gerados:")
+    print("•", summary_path,   "— resumo bullets")
+    print("•", linkedin_path,  "— LinkedIn pro")
+    print("•", substack_path,  "— Substack newsletter")
+    print("•", shorts_path,    "— YouTube Shorts script")
+    print("•", tweets_path,    "— tweets para X")
 
     if DRY_RUN:
-        print("\n🚫 DRY_RUN ativo — Nenhum post foi publicado.")
+        print("\n🚫 DRY_RUN ativo — Nenhum post real foi publicado.")
     else:
         print("\n✨ Concluído com sucesso!")
 
