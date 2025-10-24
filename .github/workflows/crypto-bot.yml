@@ -1,0 +1,31 @@
+name: CryptoPulse Daily Bot
+
+on:
+  schedule:
+    - cron: '0 7 * * *'   # Todos os dias às 8h de Lisboa (7h UTC)
+  workflow_dispatch:       # Permite execução manual também
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clonar repositório
+        uses: actions/checkout@v4
+
+      - name: Instalar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependências
+        run: pip install requests feedparser python-dotenv
+
+      - name: Executar o bot
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CRYPTOPANIC_TOKEN: ${{ secrets.CRYPTOPANIC_TOKEN }}
+          BLUESKY_HANDLE: ${{ secrets.BLUESKY_HANDLE }}
+          BLUESKY_PASSWORD: ${{ secrets.BLUESKY_PASSWORD }}
+          DRY_RUN: ${{ secrets.DRY_RUN }}
+        run: python main.py
