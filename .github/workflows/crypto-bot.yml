@@ -30,10 +30,16 @@ jobs:
           DRY_RUN: ${{ secrets.DRY_RUN }}
         run: python main.py
 
+      # --- Adicionado: criar variável com a data atual ---
+      - name: Set current date
+        id: date
+        run: echo "today=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      # --- Corrigido: guardar outputs com a data no nome ---
       - name: Guardar outputs (ficheiros gerados em /out)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-            name: CryptoPulse-${{ github.run_id }}
-            path: out/
-            if-no-files-found: warn
+          name: "CryptoPulse_${{ steps.date.outputs.today }}"
+          path: out/
+          if-no-files-found: warn
